@@ -1,0 +1,70 @@
+#####
+
+当一个变量定义为volatile之后，可以保证此共享变量对所有其他线程的可见性，即一条线程修改了该变量的值，则新值对于其他线程来说都是可以立即得知的立即可见的。对volatile变量的写操作都能立刻反映到其他线程之中，即volatile变量在各个线程之中是一致的。注意：java的内存模型JMM分为主内存和工作内存。所有线程间共享的变量都存储在主内存Main Memory中，每条线程都有自己的工作内存Working Memory,线程的工作内存中保存了被该线程使用到的变量的主内存的副本拷贝，线程对变量的所有操作（读取 赋值等）都必须在工作内存中进行，而不能直接读写主内存中的变量。不同线程间也无法直接访问对方工作内存中的变量，线程间变量值的传递均需要通过主内存来完成。（特别注意：根据java虚拟机规范的规定，volatile变量依然有工作内存的拷贝，由于执行引擎在每次使用该volatile变量前都要先刷新，故看不到不一致的情况，所以看起来如同直接在主内存中读写访问一般）。
+使用volatile变量的第二个语义就是禁止指令重排序优化。普通变量仅仅会保证在该方法的执行过程中所有依赖赋值结果的地方都能获取到正确的结果，而不能保证该变量赋值操作的顺序与程序代码中的执行顺序一致。因为在一个线程的方法执行过程中无法感知到这点，这也是java内存模型中描述的所谓的“线程内表现为串行的语义”（Within-Thread As-If-Serial Semantics）
+Java内存模型的三个特征是原子性、可见性、有序性。
+	原子性（Atomicity）:synchronized块之间的操作具备原子性。
+	可见性（Visibility）：指一个线程修改了某共享变量的值，其他线程能够立即得知这个修改。JAVA内存模型是通过在变量修改后将新值同步回主内存，在变量读取前从主内存刷新变量值这种依赖主内存作为传递媒介的方法来实现可见性的，无论是普通变量还是volatile变量都是如此。区别是：volatile的特殊规则保证了新值能立即同步到主内存，以及每次使用前立即从主内存刷新。因为，可以说保证了多线程操作时变量的可见性。而普通变量不能保证这一点。另外，synchronized和final这两个关键字也能实现可见性。
+	有序性（Ordering）：java内存模型的有序性是指：如果在本线程内观察，所有的操作都是有序的，如果在一个线程中观察另一个线程，所有的操作都是无序的。前半句是指线程内表现为串行的语义；后半句是指指令重排序现象和工作内存与主内存同步延迟现象。Java语言提供了volatile和synchronized两个关键字来保证线程之间操作的有序性。
+关键字volatile可以说是Java虚拟机提供的最轻量级的同步机制，但不能说基于volatile变量的运算在并发下就是安全的。例如下面的一段代码：
+package cn.zhou;
+/**
+ * volatile变量自增运算测试
+ * @author zhou
+ *
+ */
+public class VolatileTest {
+	public static volatile int race = 0;
+	public static  void increase(){
+			race++;
+	}
+	/**
+	 * 	public static synchronized void increase(){
+			race++;
+	} 
+	is ok 
+	 */
+	public static final int THREADS_COUNT = 20;
+	public static void main(String[] args) {
+		Thread[] threads = new Thread[THREADS_COUNT];
+		for(int i=0;i<THREADS_COUNT;i++){
+			threads[i] = new Thread(new Runnable() {
+				
+				@Override
+				public void run() {
+					for(int i=0;i<1000;i++)
+						increase();
+				}
+			});
+			threads[i].start();
+		}
+	/*	for(int i=0;i<THREADS_COUNT;i++){
+			try {
+				threads[i].join();
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+		} is ok
+if use CountDownLatch is also ok
+		*/
+//等待所有累加线程都结束
+	while(Thread.activeCount()>1){
+			try {
+				Thread.sleep(10);
+			} catch (InterruptedException e) {
+				e.printStackTrace();
+			}
+					//	Thread.yield(); is also ok
+		}
+		
+		System.out.println("race="+race);
+	}
+	
+}
+分析：此段代码发起了20个线程，每个线程对race变量进行1000次自增运算，如果这段代码能够正确并发的话，那最后输出的结果应该都是20000，但是运行时会发现，输出的结果可能存在小于200000的情况。（如进行10000次运算，效果更明显）。问题就在于自增运算“race++”中，因为利用javap反编译后会发现increase（）方法在Class文件中是由四条字节码指令构成的，主要看其中三条，getstatic iadd putstatic. 从字节码层面上分析并发失败的原因：当getstatic 指令把race的值取到操作栈顶时，volatile关键字保证了race的值在此时是正确的，但是在执行iadd指令时 其他线程可能已经把race变量的值加大了，而在操作栈顶的值就变成过期了的数据，所以putstatic指令执行后就可能把较小的race值同步到主内存中。（当然了 如将increase（）方法加上synchronized则可以保证并发正确）
+	由于volatile变量只能保证可见性，在不符合下面两条规则的运算场景中，我们仍然需要通过加锁（使用synchronized或java.util.concurrent中的原子类如Lock/ReentrantLock）来保证原子性。
+	运算结果并不依赖变量的当前值，或者能够确保只有单一的线程能修改变量的值
+	变量不需要与其他的状态变量共同参与不变约束
+
+
+#####
