@@ -1,0 +1,64 @@
+###
+一、java虚拟机采用的是抢占式的线程调度模型，指让可运行，池中优先级高的线程占用CPU，如果线程的优先级，那么就随机的选择一个线程，使其占用CPU。如果希望明确地让一个线程给另一个线程运行的机会，可以采取以下办法之一：
+	调整各个线程的优先级
+	让处于运行状态的线程调用Thread.sleep()方法 (稍加配合Thread.activeCount())
+	让处于运行状态的线程调用Thread.yield()(稍加配合Thread.activeCount())
+	让处于运行状态的线程调用另一个线程的join方法
+二、线程互斥：使用同步对象锁synchronized或者显式的Lock对象/ReentrantLock(java.util.concurrent.*包中的锁)--（lock(0与unlock()方法配合try/finally语句块来实现）
+三、线程同步：（1）wait/notify/notifyAll (都是Object的方法，它们必须在synchronized的代码块中且wait一般在while循环中) （2）使用java1.5 Concurrent包中提供的CountDownLatch（await和countDown方法）（3）join方法（Thread的一个方法，yield sleep也是）
+
+四、
+Lock和synchronized  
+ 
+    JDK1.5以后，在锁机制方面引入了新的锁-Lock，在网上的说法都比较笼统，结合网上的信息和我的理解这里做个总结。   
+    java现有的锁机制有两种实现方式，J.DK1.4前是通过synchronized实现，JDK1.5后加入java.util.concurrent.locks包下的各种lock（以下简称Lock）
+1、代码层区别：
+ synchronized：在代码里，synchronized类似“面向对象”，修饰类、方法、对象。      Lock：不作为修饰，类似“面向过程”，在方法中需要锁的时候lock，在结束的时候unlock（一般都在finally块里）。  例如代码：
+Lock和synchronized  
+ 
+    JDK1.5以后，在锁机制方面引入了新的锁-Lock，在网上的说法都比较笼统，结合网上的信息和我的理解这里做个总结。   
+    java现有的锁机制有两种实现方式，J.DK1.4前是通过synchronized实现，JDK1.5后加入java.util.concurrent.locks包下的各种lock（以下简称Lock）   
+先说说代码层的区别。  
+    synchronized：在代码里，synchronized类似“面向对象”，修饰类、方法、对象。      Lock：不作为修饰，类似“面向过程”，在方法中需要锁的时候lock，在结束的时候unlock（一般都在finally块里）。  例如代码：   
+Java代码   
+ public void method1() {   
+    synchronized(this){//旧锁，无需人工释放   
+   System.out.println(1);     }   
+}        
+ public void method2() {   
+     Lock lock = new ReentrantLock();   
+     lock.lock();//上锁   
+     try{   
+         System.out.println(2);   
+     }finally{   
+
+        lock.unlock();//解锁   
+    }    
+} 
+性能：在并发高是，lock性能优势很明显，在低并发时，synchronized也能取得优势
+临界范围比较难定论，下面会讨论。   
+现在来分析它们具体的区别。  
+    锁都是原子性 的，也可以理解为锁是否在使用的标记，并且比较和设置这个标记的操作是原子性的，不同硬件平台上的jdk实现锁的相关方法都是native的（比如 park/unpark），所以不同平台上锁的精确度的等级由这些native的方法决定。所以网上经常可以看见的结论是“Lock比 synchronized有更精确的原子操作”说的也是native方法（不得不感慨C才是硬件王道）。   
+LOCK和synchronized的实现机制： 
+下面继续讨论怎么由代码层到native的过程。  
+1 synchronized -- 对象加锁 
+所有对象都自动含有单一的锁，JVM负责跟踪对象被加锁的次数。如果一个对象被解锁，其计数变为0。在任务（线程）第一次给对象加锁的时候， 计数变为1。每当这个相同的任务（线程）在此对象上获得锁时，计数会递增。 只有首先获得锁的任务（线程）才能继续获取该对象上的多个锁。每当任务离开时，计数递减，当计数为0的时候，锁被完全释放。synchronized就是基于这个原理，同时synchronized靠某个对象的单一锁技术的次数来判断是否被锁，所以无需（也不能）人工干预锁的获取和释放。
+原理：
+如果结合方法调用时的栈和框架（如果对方法的调用过程不熟悉建议看看http://wupuyuan.iteye.com/blog/1157548）， 不难推测出synchronized原理是基于栈中的某对象来控制一个框架，所以对于synchronized有常用的优化是锁对象不锁方法。实际上 synchronized作用于方法时，锁住的是“this”，作用于静态方法/属性时，锁住的是存在于永久带的CLASS，相当于这个CLASS的全局 锁，锁作用于一般对象时，锁住的是对应代码块。在HotSpot中JVM实现中，锁有个专门的名字：对象监视器。    
+当多个线程同时请求某个对象监视器时，对象监视器会设置几种状态用来区分请求的线程 Contention List：所有请求锁的线程将被首先放置到该竞争队列，是个虚拟队列，不是实际的Queue的数据结构。  
+Entry List：EntryList与ContentionList逻辑上同属等待队列，ContentionList会被线程并发访问，为了降低对 ContentionList队尾的争用，而建立EntryList。，Contention List中那些有资格成为候选人的线程被移到Entry List  
+Wait Set：那些调用wait方法被阻塞的线程被放置到Wait Set  
+OnDeck：任何时刻最多只能有一个线程正在竞争锁，该线程称为OnDeck 
+Owner：获得锁的线程称为Owner  !Owner：释放锁的线程  
+2 LOCK -- 基于栈中的框架而不是对象级别 
+原理！！！！！！！！！！ 
+Lock不同于synchronized面向对象，它基于栈中的框架而不是某个具体对象，所
+以Lock只需要在栈里设置锁的开始和结束 （lock和unlock）的地方就行了（人工必须标明），不用关心框架大小对象的变化等等。这么做的好处是Lock能提供无
+条件的、可轮询的、定时的、 可中断的锁获取操作，相对于synchronized来说，synchronized的锁的获取是释放必须在一个模块里，获取和释放的顺序必须相反，而 Lock则可以在不同范围内获取释放，并且顺序无关。java.util.concurrent.locks下的锁类很类似，依赖于 java.util.concurrent.AbstractQueuedSynchronizer，它们把所有的Lock接口操作都转嫁到Sync类上，这个类继承了AbstractQueuedSynchronizer，它同时还包含子2个类：NonfairSync 和FairSync 从名字上可以看的出是为了实现公平和非公平性。AbstractQueuedSynchronizer中把所有的的请求线程构成一个队列（一样也是虚拟 的），具体的实现可以参考http://blog.csdn.net/chen77716/article/details/6641477#，这里我就不复制了。  
+3 jdk的源代码来看 
+ 从jdk的源代码来看，Lock和synchronized的源码基本相同，区别主要在维护的同步队列上。再往下深究就到了native方法了。  
+4 改进 
+ 还有个改进我也想说下，其实很重要的。线程分阻塞（wait）和非阻塞状态，阻塞状态由操作系统（linux、windows等）完成，当前 一个被“锁”的线程执行完毕后，有可能在后续的线程队列里还没分配出一个获取锁而被“唤醒”的非阻塞线程，即所有线程还都是阻塞状态时，就被系统调度（进 入内核的线程是阻塞的），这样会导致内核在用户态和内核态之间来回接换，严重影响锁的性能。在jdk1.6以前主要靠自旋锁来解决，原理是在前一个线程结 束后，争用线程可以做一个空循环，继续占有CPU，等待取锁的机会。当然这样做显然也是浪费时间，只是在两种浪费中选取浪费少的……  jdk1.6后引入了偏向锁，当线程第一次获得了监视对象，之后让监视对象“偏向”这个线程，之后的多次调用则可以避免CAS操作，等于是置了一临时变量来记录位置（类似索引比较）。详细的就涉及到汇编指令了，我也就没太深究，偏向锁性能优于自旋锁，但是还是没有达到HotSpot认为的最佳时间（一个线 程上下文切换的时间）。   
+    综合来看对于所有的高并发情况，采用Lock加锁是最优选择，但是由于历史遗留等问题，synchronized也还是不能完全被淘汰，同时，在低并发情况下，synchronized的性能还是比Lock好的。
+
+###
