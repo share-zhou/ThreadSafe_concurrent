@@ -1,0 +1,306 @@
+#####
+
+一、
+在并发领域，ThreadLocal应该说是一个不能被忽略的类，结合源码来谈一谈几个问题：什么是ThreadLocal，ThreadLocal内部实现原理，如何使用ThreadLocal。
+什么是ThreadLocal
+首先先来谈谈什么是ThreadLocal，从字面意思上来看ThreadLocal是线程本地变量的意思，那么到底什么是线程本地变量呢，可以这样理解：ThreadLocal为变量在每个线程中创建了一个副本，那么每个线程可以访问自己内部的副本变量，这样保证了副本变量在线程内部共享，线程之间隔离的效果，理解这一点很重要，这个时候我们大概知道ThreadLocal是为了保证线程范围内的共享数据而生。
+ThreadLocal内部实现原理
+下面我们将结合一个简单的例子来分析一下在什么时候应该使用ThreadLocal，首先看一下下面这段代码：
+1
+2
+3
+4
+5
+6
+7
+8
+9
+10
+11
+12
+13
+14
+15
+16	class ConnectionManager {
+ 
+    private static Connection connect = null;
+ 
+    public static Connection openConnection() {
+        if(connect == null){
+            connect = DriverManager.getConnection();
+        }
+        return connect;
+    }
+ 
+    public static void closeConnection() {
+        if(connect!=null)
+            connect.close();
+    }
+}
+上面这段代码我们简单实现了一个数据库连接池，这段代码在单线程的环境下没有任何问题，但是在多线程的环境下上面这段代码有很大的弊端：首先，这个数据库连接管理类不是线程安全的，因为它的静态方法没有加上同步锁，在执行openConnection()方法的时候可能会创建多个连接，其次由于connect是共享变量，所以在调用共享变量的时候应该用同步机制来保证线程安全。但是我们仔细想想这个connect（就是所谓的数据库连接）有必要共享吗？其实没有必要，我们想一个简单的例子：
+加入张三和李四都需要在各自的事务中完成转入和转出功能，现在假设他们共享一个数据库连接，那么当李四在张三完成转出功能之前已经完成了自己的事务，这时候李四提交事务，然后数据库连接关闭，那么这个时候张三再也完不成装出功能，因为数据库连接已经被关闭。
+那么这个时候用ThreadLocal在也合适不过了，它会为变量在每一个线程中创建一个副本变量，然后这个副本变量在线程内部实现数据共享，在线程之间实现数据隔离，下面我们就分析一下ThreadLocal的源码并且体会一下ThreadLocal的实现原理。
+首先我们看一下ThreadLocal内部几个比较重要的方法：
+/**
+     * Returns the value in the current thread's copy of this
+     * thread-local variable.  If the variable has no value for the
+     * current thread, it is first initialized to the value returned
+     * by an invocation of the {@link #initialValue} method.
+     *
+     * @return the current thread's value of this thread-local
+     */
+    public T get() {
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = getMap(t);
+        if (map != null) {
+            ThreadLocalMap.Entry e = map.getEntry(this);
+            if (e != null)
+                return (T)e.value;
+        }
+        return setInitialValue();
+    }
+
+    /**
+     * Variant of set() to establish initialValue. Used instead
+     * of set() in case user has overridden the set() method.
+     *
+     * @return the initial value
+     */
+    private T setInitialValue() {
+        T value = initialValue();
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = getMap(t);
+        if (map != null)
+            map.set(this, value);
+        else
+            createMap(t, value);
+        return value;
+    }
+
+    /**
+     * Sets the current thread's copy of this thread-local variable
+     * to the specified value.  Most subclasses will have no need to
+     * override this method, relying solely on the {@link #initialValue}
+     * method to set the values of thread-locals.
+     *
+     * @param value the value to be stored in the current thread's copy of
+     *        this thread-local.
+     */
+    public void set(T value) {
+        Thread t = Thread.currentThread();
+        ThreadLocalMap map = getMap(t);
+        if (map != null)
+            map.set(this, value);
+        else
+            createMap(t, value);
+    }
+
+    /**
+     * Removes the current thread's value for this thread-local
+     * variable.  If this thread-local variable is subsequently
+     * {@linkplain #get read} by the current thread, its value will be
+     * reinitialized by invoking its {@link #initialValue} method,
+     * unless its value is {@linkplain #set set} by the current thread
+     * in the interim.  This may result in multiple invocations of the
+     * <tt>initialValue</tt> method in the current thread.
+     *
+     * @since 1.5
+     */
+     public void remove() {
+         ThreadLocalMap m = getMap(Thread.currentThread());
+         if (m != null)
+             m.remove(this);
+     }
+
+    /**
+     * Get the map associated with a ThreadLocal. Overridden in
+     * InheritableThreadLocal.
+     *
+     * @param  t the current thread
+     * @return the map
+     */
+    ThreadLocalMap getMap(Thread t) {
+        return t.threadLocals;
+    }
+
+    /**
+     * Create the map associated with a ThreadLocal. Overridden in
+     * InheritableThreadLocal.
+     *
+     * @param t the current thread
+     * @param firstValue value for the initial entry of the map
+     * @param map the map to store.
+     */
+    void createMap(Thread t, T firstValue) {
+        t.threadLocals = new ThreadLocalMap(this, firstValue);
+}
+/**
+     * ThreadLocalMap is a customized hash map suitable only for
+     * maintaining thread local values. No operations are exported
+     * outside of the ThreadLocal class. The class is package private to
+     * allow declaration of fields in class Thread.  To help deal with
+     * very large and long-lived usages, the hash table entries use
+     * WeakReferences for keys. However, since reference queues are not
+     * used, stale entries are guaranteed to be removed only when
+     * the table starts running out of space.
+     */
+    static class ThreadLocalMap {
+
+        /**
+         * The entries in this hash map extend WeakReference, using
+         * its main ref field as the key (which is always a
+         * ThreadLocal object).  Note that null keys (i.e. entry.get()
+         * == null) mean that the key is no longer referenced, so the
+         * entry can be expunged from table.  Such entries are referred to
+         * as "stale entries" in the code that follows.
+         */
+        static class Entry extends WeakReference<ThreadLocal> {
+            /** The value associated with this ThreadLocal. */
+            Object value;
+
+            Entry(ThreadLocal k, Object v) {
+                super(k);
+                value = v;
+            }
+        } /**
+         * Construct a new map initially containing (firstKey, firstValue).
+         * ThreadLocalMaps are constructed lazily, so we only create
+         * one when we have at least one entry to put in it.
+         */
+        ThreadLocalMap(ThreadLocal firstKey, Object firstValue) {
+            table = new Entry[INITIAL_CAPACITY];
+            int i = firstKey.threadLocalHashCode & (INITIAL_CAPACITY - 1);
+            table[i] = new Entry(firstKey, firstValue);
+            size = 1;
+            setThreshold(INITIAL_CAPACITY);
+        }
+  /**
+         * Get the entry associated with key.  This method
+         * itself handles only the fast path: a direct hit of existing
+         * key. It otherwise relays to getEntryAfterMiss.  This is
+         * designed to maximize performance for direct hits, in part
+         * by making this method readily inlinable.
+         *
+         * @param  key the thread local object
+         * @return the entry associated with key, or null if no such
+         */
+        private Entry getEntry(ThreadLocal key) {
+            int i = key.threadLocalHashCode & (table.length - 1);
+            Entry e = table[i];
+            if (e != null && e.get() == key)
+                return e;
+            else
+                return getEntryAfterMiss(key, i, e);
+        }
+  /**
+         * Set the value associated with key.
+         *
+         * @param key the thread local object
+         * @param value the value to be set
+         */
+        private void set(ThreadLocal key, Object value) {
+
+            // We don't use a fast path as with get() because it is at
+            // least as common to use set() to create new entries as
+            // it is to replace existing ones, in which case, a fast
+            // path would fail more often than not.
+
+            Entry[] tab = table;
+            int len = tab.length;
+            int i = key.threadLocalHashCode & (len-1);
+
+            for (Entry e = tab[i];
+                 e != null;
+                 e = tab[i = nextIndex(i, len)]) {
+                ThreadLocal k = e.get();
+
+                if (k == key) {
+                    e.value = value;
+                    return;
+                }
+
+                if (k == null) {
+                    replaceStaleEntry(key, value, i);
+                    return;
+                }
+            }
+
+            tab[i] = new Entry(key, value);
+            int sz = ++size;
+            if (!cleanSomeSlots(i, sz) && sz >= threshold)
+                rehash();
+        }
+
+        /**
+         * Remove the entry for key.
+         */
+        private void remove(ThreadLocal key) {
+            Entry[] tab = table;
+            int len = tab.length;
+            int i = key.threadLocalHashCode & (len-1);
+            for (Entry e = tab[i];
+                 e != null;
+                 e = tab[i = nextIndex(i, len)]) {
+                if (e.get() == key) {
+                    e.clear();
+                    expungeStaleEntry(i);
+                    return;
+                }
+            }
+        }
+1 public T get(){}
+get()方法是得到当前ThreadLocal变量在线程中的副本变量. 首先得到线程t，然后根据当前线程得到ThreadLocalMap，然后根据当前的ThreadLocal的变量来得到副本变量，如果map不为空，就返回副本变量，如果map为空就调用setInitialValue()方法来返回副本变量。这个地方或许很多有有一个疑问，map.getEntry(this)中的this指的是什么，在这里我们可以这样理解this:以往我们理解this都是一个指向调用当前方法的对象的指针，所以这里this就是指向调用get()方法的ThreadLocal变量的地址。
+每个线程都有一个threadLocals的ThreadLocalMap类型的变量
+2 public void set() {}
+set()方法就是设置ThreadLocal变量在线程内部的副本变量. 大体流程还是得到当前的线程，然后获取map对象设置副本变量。3 public void remove(){}
+remove（）方法就是移除ThreadLocal变量在线程内部的变量副本。
+大体流程就是根据当前的线程，得到map对象，然后根据当前的ThreadLocal变量来来移除副本变量。
+到这里我想大家都应该明白了ThreadLocal的基本原理，首先每一个线程内部都有一个ThreadLocal.ThreadLocalMap类型的成员变量threadlocals,这个threadlocal成员变量是一个map类型，key为当前ThreadLocal变量，value为副本变量。初始化的时候，threadlocals是为空的，然后ThreadLocal变量调用get（）或者set（）方法都可以完成对threadlocals成员变量的初始化，其中当前ThreadLocal变量为key，value为当前ThreadLocal变量要保存的副本变量。
+二、
+维持线程封闭性的方法有栈封闭和ThreadLocal类。
+利用ThreadLocal来维护变量会为每个使用该变量的线程提供独立的变量副本，即它从根本上解决的是资源共享即资源数量的问题，为每一个线程提供各自独立的副本资源。因此多线程并发时不需要考虑同步问题，性能大大提升，但有更多的空间消耗，是一种利用空间换取时间的解决方案。“将Connection绑定到当前线程”
+	线程间隔离的作用
+package cn.zhou;
+import java.util.concurrent.atomic.AtomicInteger;
+public class ThreadId {
+	//AtomicInteger包含下一个需要被赋值的线程ID
+	private static final AtomicInteger nextId = new AtomicInteger(0);
+	//线程本地变量包含每个线程的ID
+	private static final ThreadLocal<Integer> threadId = 
+			new ThreadLocal<Integer>(){
+			
+		protected Integer initialValue() {
+			return nextId.getAndIncrement();
+		}	
+	};
+	//returns the current thread's unique ID,assigning it if necessary
+	public static int get(){
+		return threadId.get();
+	}
+}
+
+package cn.zhou;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.SQLException;
+public class ConnectionFac {
+	private static ThreadLocal<Connection> connectionHolder = 
+			new ThreadLocal<Connection>(){
+			@Override
+			protected Connection initialValue() {
+				try {
+					return DriverManager.getConnection("", "", "");
+				} catch (SQLException e) {
+					e.printStackTrace();
+					return null;
+				}
+			};
+	};
+	public static Connection getConnection(){
+		return connectionHolder.get();
+	}
+	
+}
+
+
+#####
